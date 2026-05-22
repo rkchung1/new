@@ -1,24 +1,29 @@
 # BTC 5m Polymarket multi-agent backtester
 
-Reproducible **offline backtesting** for Polymarket [BTC Up or Down 5m](https://polymarket.com/event/btc-updown-5m-1778120400)-style markets: discover markets with the **Gamma API**, pull historical **YES** prices from the public **CLOB `/prices-history`**, align **BTC-USD 5m** candles from **Coinbase Exchange**, cache everything as **Parquet**, then replay **1-minute snapshots** through a small **LangGraph** workflow with four typed agents and a simulated broker.
+Reproducible **offline backtesting** for Polymarket BTC Up or Down 5-minute markets using a pre-built **`btc_5m_2s.parquet`** replay file (~2 second ticks, strike-relative BTC, bid/ask). A small **LangGraph** workflow runs four typed agents with a simulated broker.
 
 **There is no live trading and no authenticated Polymarket access.**
 
 ## What the system does
 
-1. **Discover** candidate event slugs `btc-updown-5m-{unix_start}` in a date range and resolve them via `GET https://gamma-api.polymarket.com/events?slug=...`.
-2. **Ingest** YES token price history from `https://clob.polymarket.com/prices-history` and BTC candles from `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300`.
-3. **Cache** raw pulls under `data/cache/` as Parquet (idempotent; safe to re-run).
-4. **Build** a single **replay dataset** (`replay_{start}_{end}.parquet`) where each row is one `(timestamp, market)` snapshot with joined BTC context.
-5. **Backtest** by walking rows in global timestamp order, calling a LangGraph graph each step, applying **conservative execution** (±$0.01 slippage, prices clipped to `[0.01, 0.99]`), enforcing **per-market** and **total** exposure caps, and **settling** YES shares at market end using the **resolved Polymarket outcome** from Gamma (`settlement_yes`).
-6. **Report** trades, decisions, equity curve, and summary metrics under `reports/backtests/{run_id}/`.
+1. **Load** `data/cache/btc_5m_2s.parquet` (2s Polymarket + BTC strike-gap snapshots).
+2. **Normalize** into an engine replay table: filter `elapsed >= 101` (data starts 100s into each 5m window), optional date filter, subsample agent steps (default every 10s), append synthetic expiry rows at `start_time + 300`.
+3. **Backtest** by walking rows in global `(ts, market_id)` order, calling LangGraph each step, executing at **bid/ask** with slippage, and **settling** YES at expiry using `winner` (engine-only, not shown to agents).
+4. **Report** trades, decisions, equity curve, and summary metrics under `reports/backtests/{run_id}/`.
+
+### Dormant scripts (kept, not used by backtest)
+
+- `discover_markets` — Gamma API market discovery
+- `build_dataset` — 1-minute API replay builder (`replay_*.parquet`)
+
+These may be revived later; the active path uses only `btc_5m_2s.parquet`.
 
 ## How the backtester works
 
-- The engine sorts the replay table by `(ts, market_id)` and processes row-by-row.
-- **Settlement** runs on the terminal snapshot at `ts == market_end_ts` (appended during dataset build) so cash flows occur exactly at expiry without lookahead during the window.
-- On expiry rows the workflow is **skipped** (forced `HOLD`): no trading after the official window end.
-- **Execution** uses `buy_price = clip(yes + 0.01)` and `sell_price = clip(yes - 0.01)` within `[0.01, 0.99]`, then converts `size_usd` to shares.
+- Rows are sorted by `(ts, market_id)`; `ts` comes from `timestamp_log` (= `start_time + elapsed`).
+- **Trading** only when `ts < market_end_ts` and `elapsed >= 101`.
+- **Settlement** on rows with `ts >= market_end_ts` (synthetic expiry row per market).
+- **Execution:** BUY at `ask_YES + slippage`, SELL at `bid_YES - slippage`, clipped to `[0.01, 0.99]`.
 
 ### Defaults
 
@@ -28,62 +33,88 @@ Reproducible **offline backtesting** for Polymarket [BTC Up or Down 5m](https://
 | Max position / market | $100 |
 | Max total exposure | $300 |
 | Slippage | $0.01 |
+| Decision interval | 10 seconds |
+| Data start (elapsed) | 101 seconds |
 
-Override via environment variables in `.env` (see `config.py` / `Settings`).
+Override via `.env` / `Settings` in `config.py`.
 
 ## Avoiding lookahead bias
 
-- Agents receive a **`Snapshot`** built only from columns knowable at that `ts` (YES price, time to expiry, BTC features). **Settlement / resolution is never included** in the LLM payload.
-- CLOB history fetches are **truncated to the market window** (plus one minute of padding for the last tick), so future prices for that market are not in cache.
-- The replay file may contain `settlement_yes` for offline metrics and settlement accounting; the engine **strips it from the agent view** and only uses it after expiry for cash settlement.
-- **Brier score** and **average confidence** metrics only use pre-expiry rows (`ts < market_end_ts`) so terminal bookkeeping rows do not pollute scoring.
+- Each tick appends to a **causal 15-minute cache** (global BTC tape + per-market book history), then a **FeatureEngine** emits compact `BtcFeatures` / `PolyFeatures` (no future rows).
+- Agents receive **role-specific feature JSON** only—not full snapshots. **`winner` / `resolved` / `settlement_yes` are never in the LLM payload.**
+- `settlement_yes` is used only by the engine at/after expiry for cash settlement and Brier metrics.
+- Brier score uses pre-expiry rows only (`ts < market_end_ts`).
 
-## LangGraph agents (TradingAgents-style mapping)
+## LangGraph agents
 
-| Agent | Role | TradingAgents analogy |
-|-------|------|------------------------|
-| **Price Analyst** | Interprets BTC momentum/vol from the snapshot | Market / fundamentals analyst |
-| **Polymarket Analyst** | Reads implied probability from YES price vs fundamentals | Sentiment / news analyst |
-| **Risk Manager** | Enforces exposure and dollar caps | Risk debator / compliance |
-| **Portfolio Manager** | Emits `BUY_YES`, `SELL_YES`, or `HOLD` with size | Trader / portfolio manager |
+| Agent | Role |
+|-------|------|
+| **Price Analyst** | `btc_features`: momentum, vol, trend, strike gap, timing |
+| **Polymarket Analyst** | `poly_features`: mids, spread, imbalance, prob divergence |
+| **Risk Manager** | Exposure caps, late-window buy block |
+| **Portfolio Manager** | `BUY_YES` / `SELL_YES` / `HOLD` |
 
-Each agent returns a **Pydantic** schema (`agents/schemas.py`). Use **`--mock-llm`** for deterministic, API-free runs; otherwise configure `OPENAI_API_KEY` and pass **`--model`**.
+Use **`--mock-llm`** for deterministic runs without any LLM.
+
+### LLM backends
+
+| Backend | Config | Notes |
+|---------|--------|--------|
+| **openai** | `LLM_BACKEND=openai`, `OPENAI_API_KEY` | Default cloud API |
+| **vllm** | `LLM_BACKEND=vllm`, `VLLM_BASE_URL=http://localhost:8000/v1`, `LLM_MAX_TOKENS=1024` | Local vLLM; raise `LLM_MAX_TOKENS` if structured JSON truncates |
+| **mock** | `--mock-llm` | Rule-based agents, no HTTP |
 
 ## CLI
 
-Install (editable):
-
 ```bash
-cd new_polyagents
-python3 -m venv .venv && source .venv/bin/activate  # Python 3.9+
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Discover markets (writes `data/cache/markets/markets_{start}_{end}.parquet`):
+Run backtest (mock agents):
 
 ```bash
-python -m btc5m_agents.scripts.discover_markets --start-date 2026-05-01 --end-date 2026-05-02
+python -m btc5m_agents.scripts.run_backtest --mock-llm --decision-every-sec 10
 ```
 
-Build replay dataset:
+Filter by market `start_time` (UTC calendar days covered by the parquet):
 
 ```bash
-python -m btc5m_agents.scripts.build_dataset --start-date 2026-05-01 --end-date 2026-05-02
+python -m btc5m_agents.scripts.run_backtest --mock-llm \
+  --start-date 2026-03-01 --end-date 2026-03-04
 ```
 
-Run backtest (mock agents, no OpenAI key required):
+With OpenAI:
 
 ```bash
-python -m btc5m_agents.scripts.run_backtest --mock-llm --start-date 2026-05-01 --end-date 2026-05-02
+python -m btc5m_agents.scripts.run_backtest --llm-backend openai --model gpt-4o-mini
 ```
 
-Run with OpenAI (requires `.env`):
+With local vLLM (OpenAI-compatible API on port 8000):
 
 ```bash
-python -m btc5m_agents.scripts.run_backtest --model gpt-4o-mini --start-date 2026-05-01 --end-date 2026-05-02
+# Terminal 1: start vLLM
+vllm serve <model> --port 8000
+
+# Terminal 2: backtest (set VLLM_MODEL to the served model id)
+python -m btc5m_agents.scripts.run_backtest \
+  --llm-backend vllm \
+  --model <model> \
+  --decision-every-sec 60
 ```
 
-If `--start-date` / `--end-date` are omitted, the runner picks the **newest** `replay_*.parquet` in `data/cache/`.
+Or via `.env`:
+
+```env
+LLM_BACKEND=vllm
+VLLM_BASE_URL=http://localhost:8000/v1
+VLLM_MODEL=<model>
+VLLM_API_KEY=EMPTY
+LLM_MAX_TOKENS=1024
+MARKET_HISTORY_SEC=900
+```
+
+`decisions.jsonl` logs `btc_features` and `poly_features` per step (not full snapshots).
 
 Inspect the latest run:
 
@@ -91,29 +122,19 @@ Inspect the latest run:
 python -m btc5m_agents.scripts.inspect_results --run-id latest
 ```
 
+## Data file
+
+Place your replay at:
+
+`data/cache/btc_5m_2s.parquet`
+
+Expected columns: `slug`, `start_time`, `elapsed`, `ask_YES`, `bid_YES`, `timestamp_log`, `btc_strike`, `btc_current`, `btc_gap`, `winner` (plus optional `ask_NO`, `bid_NO`, `resolved`).
+
+Normalized cache (optional, auto-written): `data/cache/btc_5m_2s_normalized_{hash}.parquet`
+
 ## Reports
 
-Each run writes:
-
-- `trades.csv` — includes `SETTLE` rows for expiry cashflows
-- `decisions.jsonl` — full structured agent outputs + `settlement_y_for_metrics` (never fed to agents)
-- `equity_curve.csv`
-- `summary.json` — `initial_cash`, `final_equity`, `total_return_pct`, `max_drawdown_pct`, `num_trades`, `num_markets_traded`, `win_rate`, `realized_pnl`, `settlement_pnl`, `avg_agent_confidence`, `brier_score` (when labels exist)
-- `config_snapshot.json` — settings + SHA-256 of the replay file
-
-`reports/backtests/latest` symlink (or `latest_run_id.txt` fallback) points at the most recent run.
-
-## Project layout
-
-```
-src/btc5m_agents/
-  config.py
-  types.py
-  data/
-  agents/
-  backtest/
-  scripts/
-```
+Each run writes `trades.csv`, `decisions.jsonl`, `equity_curve.csv`, `summary.json`, and `config_snapshot.json` under `reports/backtests/{run_id}/`.
 
 ## Disclaimer
 

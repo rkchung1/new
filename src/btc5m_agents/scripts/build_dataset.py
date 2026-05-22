@@ -1,4 +1,7 @@
-"""CLI: build replay Parquet from cached markets + CLOB + BTC."""
+"""CLI: build replay Parquet from cached markets + CLOB + BTC.
+
+Dormant: not used by run_backtest. Retained for possible future API-based replay.
+"""
 
 from __future__ import annotations
 

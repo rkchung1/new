@@ -64,7 +64,8 @@ def build_summary(
     final_eq = float(equity_curve["total_equity"].iloc[-1]) if not equity_curve.empty else initial_cash
     ret_pct = (final_eq / initial_cash - 1.0) * 100 if initial_cash else 0.0
     mdd = max_drawdown_pct(equity_curve["total_equity"]) if not equity_curve.empty else 0.0
-    n_tr = int(len(trades[trades["action"].isin(["BUY_YES", "SELL_YES"])])) if not trades.empty else 0
+    trade_actions = ["BUY_YES", "SELL_YES", "BUY_NO", "SELL_NO"]
+    n_tr = int(len(trades[trades["action"].isin(trade_actions)])) if not trades.empty else 0
     avg_conf = 0.0
     if not decisions.empty and "confidence" in decisions.columns:
         dc = decisions

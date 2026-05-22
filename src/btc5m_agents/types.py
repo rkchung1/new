@@ -6,8 +6,9 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-Action = Literal["BUY_YES", "SELL_YES", "HOLD"]
-TradeAction = Literal["BUY_YES", "SELL_YES", "SETTLE"]
+Action = Literal["BUY_YES", "SELL_YES", "BUY_NO", "SELL_NO", "HOLD"]
+TradeAction = Literal["BUY_YES", "SELL_YES", "BUY_NO", "SELL_NO", "SETTLE_YES", "SETTLE_NO"]
+OutcomeSide = Literal["YES", "NO"]
 
 
 class MarketMeta(BaseModel):
@@ -50,22 +51,35 @@ class Snapshot(BaseModel):
     yes_token_id: str
     event_slug: str
     yes_price: float
+    no_price: float
     mins_to_expiry: float
     btc_price: float
     btc_ret_5m: float
     btc_vol_30m: float
     question: Optional[str] = None
+    elapsed_sec: Optional[int] = None
+    secs_to_expiry: Optional[float] = None
+    bid_yes: Optional[float] = None
+    ask_yes: Optional[float] = None
+    bid_no: Optional[float] = None
+    ask_no: Optional[float] = None
+    btc_strike: Optional[float] = None
+    btc_gap: Optional[float] = None
 
 
-class Position(BaseModel):
+class MarketPosition(BaseModel):
+    """YES and NO legs for one market."""
+
     market_id: str
-    shares: float = 0.0
-    avg_cost: float = 0.0
+    yes_shares: float = 0.0
+    yes_avg_cost: float = 0.0
+    no_shares: float = 0.0
+    no_avg_cost: float = 0.0
 
 
 class PortfolioSnapshot(BaseModel):
     cash: float
-    positions: dict[str, Position] = Field(default_factory=dict)
+    positions: dict[str, MarketPosition] = Field(default_factory=dict)
     exposure_usd: float = 0.0
 
 

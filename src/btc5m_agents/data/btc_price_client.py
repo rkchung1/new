@@ -1,4 +1,4 @@
-"""Coinbase Exchange public candles (5-minute BTC-USD)."""
+"""Coinbase Exchange public candles (1-minute BTC-USD)."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from btc5m_agents.config import Settings, get_settings
 
 
 class BtcPriceClient:
-    """Fetches BTC-USD candles with granularity=300 (5m), chunked to 300 bars per call."""
+    """Fetches BTC-USD candles with granularity=60 (1m), chunked to 300 bars per call."""
 
-    GRANULARITY_SEC = 300
+    GRANULARITY_SEC = 60
     MAX_BARS = 300
 
     def __init__(self, settings: Optional[Settings] = None) -> None:
@@ -40,7 +40,7 @@ class BtcPriceClient:
     def fetch_candles(self, start_ts: int, end_ts: int) -> list[list[Any]]:
         """
         Returns raw Coinbase candle rows: [time, low, high, open, close, volume].
-        `time` is bucket start in unix seconds.
+        `time` is bucket start in unix seconds. Replay uses `open` at each bucket start.
         """
         base = self._s.coinbase_exchange_url.rstrip("/") + "/products/BTC-USD/candles"
         window = self.GRANULARITY_SEC * self.MAX_BARS

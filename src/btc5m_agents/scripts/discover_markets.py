@@ -1,4 +1,7 @@
-"""CLI: discover BTC 5m markets via Gamma slug enumeration."""
+"""CLI: discover BTC 5m markets via Gamma slug enumeration.
+
+Dormant: not used by run_backtest. Retained for possible future API-based replay.
+"""
 
 from __future__ import annotations
 

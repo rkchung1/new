@@ -1,4 +1,7 @@
-"""Build aligned 1-minute replay Parquet from markets + CLOB + BTC candles."""
+"""Build aligned 1-minute replay Parquet from markets + CLOB + BTC candles.
+
+Dormant: not used by run_backtest. Retained for possible future API-based replay.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ import pandas as pd
 from btc5m_agents.config import Settings, get_settings
 from btc5m_agents.data.btc_price_client import BtcPriceClient
 from btc5m_agents.data.cache import cache_root, read_parquet, write_parquet
-from btc5m_agents.data.market_discovery import load_markets_bundle
+from btc5m_agents.data.market_discovery import load_markets_bundle, window_ts_from_slug
 from btc5m_agents.data.polymarket_client import PolymarketClient
 
 
@@ -25,6 +28,16 @@ def _minute_grid(start_ts: int, end_ts: int, step: int = 60) -> np.ndarray:
         out.append(t)
         t += step
     return np.array(out, dtype=np.int64)
+
+
+def _replay_ts_grid(start_ts: int, end_ts: int, step: int = 60) -> np.ndarray:
+    """Like `_minute_grid` but includes `end_ts` so expiry row gets fresh BTC/YES joins."""
+    grid = _minute_grid(start_ts, end_ts, step)
+    if len(grid) == 0:
+        return np.array([np.int64(end_ts)], dtype=np.int64)
+    if int(grid[-1]) < end_ts:
+        grid = np.append(grid, np.int64(end_ts))
+    return grid
 
 
 def _clob_cache_path(s: Settings, token_id: str, start_ts: int, end_ts: int) -> Path:
@@ -61,7 +74,8 @@ def _build_btc_minute_features(
     global_start: int,
     global_end: int,
 ) -> pd.DataFrame:
-    cache_path = cache_root(s) / "btc" / f"btc_minute_{global_start}_{global_end}.parquet"
+    # Cache key includes "open" — btc_price uses candle open (bucket start), not close.
+    cache_path = cache_root(s) / "btc" / f"btc_1m_open_{global_start}_{global_end}.parquet"
     if cache_path.exists():
         return read_parquet(cache_path)
     client = BtcPriceClient(s)
@@ -72,22 +86,22 @@ def _build_btc_minute_features(
         )
         write_parquet(empty, cache_path)
         return empty
-    c5 = pd.DataFrame(
+    c1m = pd.DataFrame(
         raw,
         columns=["ts", "low", "high", "open", "close", "volume"],
     ).sort_values("ts")
-    c5["ts"] = c5["ts"].astype(np.int64)
-    c5["close"] = c5["close"].astype(float)
+    c1m["ts"] = c1m["ts"].astype(np.int64)
+    c1m["open"] = c1m["open"].astype(float)
 
     minute_ts = _minute_grid(global_start - 1800, global_end + 1800, 60)
     base = pd.DataFrame({"ts": minute_ts})
     merged = pd.merge_asof(
         base.sort_values("ts"),
-        c5[["ts", "close"]].sort_values("ts"),
+        c1m[["ts", "open"]].sort_values("ts"),
         on="ts",
         direction="backward",
     )
-    merged.rename(columns={"close": "btc_price"}, inplace=True)
+    merged.rename(columns={"open": "btc_price"}, inplace=True)
     merged["btc_price"] = merged["btc_price"].ffill()
     merged["btc_ret_5m"] = merged["btc_price"] / merged["btc_price"].shift(5) - 1.0
     merged["btc_vol_30m"] = merged["btc_price"].pct_change().rolling(30).std()
@@ -106,6 +120,7 @@ def build_replay_dataset(
     """
     Produce `replay_{start_date}_{end_date}.parquet` with 1 row per (minute, market).
 
+    Each market's window is `[slug_unix, slug_unix + 300)` from `event_slug`, not Gamma dates.
     Columns include `settlement_yes` for engine-only settlement (not passed to agents).
     """
     s = settings or get_settings()
@@ -115,21 +130,28 @@ def build_replay_dataset(
             f"No markets bundle at markets_{start_date}_{end_date}.parquet; run discover_markets first.",
         )
 
-    global_start = int(markets["start_ts"].min()) - 3600
-    global_end = int(markets["end_ts"].max()) + 3600
+    windows: list[tuple[int, int]] = []
+    for slug in markets["event_slug"]:
+        w = window_ts_from_slug(str(slug), prefix=s.slug_prefix)
+        if w is not None:
+            windows.append(w)
+    if not windows:
+        raise ValueError("No markets with parseable slug windows in bundle.")
+    global_start = min(w[0] for w in windows) - 3600
+    global_end = max(w[1] for w in windows) + 3600
     btc_min = _build_btc_minute_features(s, global_start, global_end)
 
     clob = PolymarketClient(s)
     frames: list[pd.DataFrame] = []
 
     for _, row in markets.iterrows():
-        m_start = int(row["start_ts"])
-        m_end = int(row["end_ts"])
+        window = window_ts_from_slug(str(row["event_slug"]), prefix=s.slug_prefix)
+        if window is None:
+            continue
+        m_start, m_end = window
         yes_token = str(row["yes_token_id"])
         hist_df = _fetch_or_load_clob(clob, s, yes_token, m_start, m_end)
-        grid = _minute_grid(m_start, m_end, 60)
-        if len(grid) == 0:
-            continue
+        grid = _replay_ts_grid(m_start, m_end, 60)
         gdf = pd.DataFrame({"ts": grid})
         if hist_df.empty:
             gdf["yes_price"] = np.nan
@@ -162,13 +184,6 @@ def build_replay_dataset(
         gdf["question"] = row.get("question")
         sy = row.get("settlement_yes")
         gdf["settlement_yes"] = float(sy) if sy is not None and not pd.isna(sy) else np.nan
-        # Terminal snapshot at exact expiry so the engine can settle with ts >= market_end_ts
-        # Avoid DataFrame([Series]) + .loc on row 0: it upcasts dtypes and breaks concat on pandas 2.3+.
-        if not gdf.empty and int(gdf["ts"].max()) < m_end:
-            terminal = gdf.iloc[-1:].copy()
-            terminal["ts"] = np.int64(m_end)
-            terminal["mins_to_expiry"] = 0.0
-            gdf = pd.concat([gdf, terminal], ignore_index=True)
         frames.append(gdf)
 
     if not frames:

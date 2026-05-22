@@ -43,6 +43,29 @@ def slug_for_ts(prefix: str, ts: int) -> str:
     return f"{prefix}-{ts}"
 
 
+WINDOW_DURATION_SEC = 300
+
+
+def window_ts_from_slug(
+    slug: str,
+    *,
+    prefix: str = "btc-updown-5m",
+    duration_sec: int = WINDOW_DURATION_SEC,
+) -> Optional[tuple[int, int]]:
+    """
+    Parse `btc-updown-5m-{unix_start}` → (start_ts, end_ts) for the 5m resolution window.
+    """
+    needle = f"{prefix}-"
+    if not slug.startswith(needle):
+        return None
+    suffix = slug[len(needle) :]
+    try:
+        start = int(suffix)
+    except ValueError:
+        return None
+    return start, start + duration_sec
+
+
 def _parse_json_list(s: Optional[str]) -> list[Any]:
     if not s:
         return []
@@ -94,17 +117,11 @@ def event_to_market_meta(event: dict[str, Any], settings: Settings) -> Optional[
     yes_token = str(tokens[0])
     no_token = str(tokens[1]) if len(tokens) > 1 else None
 
-    start_iso = m0.get("startDate") or event.get("startDate")
-    end_iso = m0.get("endDate") or event.get("endDate")
-    if not start_iso or not end_iso:
+    slug = str(event.get("slug") or m0.get("slug") or "")
+    window = window_ts_from_slug(slug, prefix=settings.slug_prefix)
+    if window is None:
         return None
-    try:
-        start_ts = int(pd.Timestamp(start_iso).timestamp())
-        end_ts = int(pd.Timestamp(end_iso).timestamp())
-    except Exception:
-        return None
-
-    slug = event.get("slug") or m0.get("slug") or ""
+    start_ts, end_ts = window
     sett = settlement_yes_from_market(m0)
     return MarketMeta(
         event_slug=str(slug),

@@ -11,3 +11,4 @@ build/
 data/cache/**/*.parquet
 reports/
 backtest_run.log
+data/cache/btc_5m_2s.csv

@@ -51,8 +51,8 @@ Override via `.env` / `Settings` in `config.py`.
 |-------|------|
 | **Price Analyst** | `btc_features`: momentum, vol, trend, strike gap, timing |
 | **Polymarket Analyst** | `poly_features`: mids, spread, imbalance, prob divergence |
-| **Risk Manager** | Exposure caps, late-window buy block |
-| **Portfolio Manager** | `BUY_YES` / `SELL_YES` / `HOLD` |
+| **Risk Manager** | Compact policy: `action`, `max_size`, `confidence`, `signals` |
+| **Portfolio Manager** | Deterministic map from risk policy → `Decision` (no LLM) |
 
 Use **`--mock-llm`** for deterministic runs without any LLM.
 

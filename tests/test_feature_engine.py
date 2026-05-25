@@ -29,7 +29,7 @@ def _snap(ts: int, price: float, yes: float = 0.5, gap: float = 10.0) -> Snapsho
     )
 
 
-def test_momentum_and_spread() -> None:
+def test_momentum_and_poly_features() -> None:
     cache = MarketStateCache(history_sec=900)
     engine = FeatureEngine()
     prices = [100_000.0, 100_010.0, 100_020.0, 100_030.0]
@@ -38,8 +38,13 @@ def test_momentum_and_spread() -> None:
         cache.update(snap)
         btc_f, poly_f = engine.compute(cache, snap)
 
-    assert btc_f.return_30s is not None
-    assert btc_f.return_30s > 0
-    assert poly_f.yes_spread is not None
-    assert abs(poly_f.yes_spread - 0.02) < 1e-6
-    assert poly_f.prob_divergence == poly_f.mid_sum - 1.0
+    assert btc_f.return_60s is not None
+    assert btc_f.return_60s > 0
+    assert "btc_price" not in btc_f.model_dump()
+    assert "market_id" not in btc_f.model_dump()
+    assert poly_f.yes_spread_pct is not None
+    assert abs(poly_f.yes_spread_pct - 0.02 / poly_f.yes_mid) < 0.01
+    assert "no_mid" not in poly_f.model_dump()
+    assert poly_f.strike_gap_pct == btc_f.strike_gap_pct
+    assert poly_f.return_60s == btc_f.return_60s
+    assert poly_f.vol_120s == btc_f.vol_120s

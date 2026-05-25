@@ -4,53 +4,59 @@ from __future__ import annotations
 
 from typing import Optional
 
-from btc5m_agents.agents.schemas import Decision, PolyView, PriceView, RiskView
+from btc5m_agents.agents.schemas import PolyView, PriceView, RiskView
 from btc5m_agents.config import Settings, get_settings
 from btc5m_agents.features.models import BtcFeatures, PolyFeatures
 from btc5m_agents.types import PortfolioSnapshot
 
 
-def _gap_signal(btc: BtcFeatures) -> tuple[str, float, str]:
+def _direction_signal(btc: BtcFeatures) -> tuple[str, float, list[str]]:
+    signals: list[str] = []
     if btc.strike_gap_pct is not None and btc.strike_gap_pct == btc.strike_gap_pct:
         rel = btc.strike_gap_pct
         if rel > 0.0001:
-            return "UP", min(0.95, 0.5 + abs(rel) * 500), f"strike_gap_pct={rel:.6f}"
+            signals.append("above_strike")
+            return "UP", min(0.95, 0.5 + abs(rel) * 500), signals
         if rel < -0.0001:
-            return "DOWN", min(0.95, 0.5 + abs(rel) * 500), f"strike_gap_pct={rel:.6f}"
-        return "FLAT", 0.4, f"strike_gap_pct={rel:.6f}"
+            signals.append("below_strike")
+            return "DOWN", min(0.95, 0.5 + abs(rel) * 500), signals
+        signals.append("at_strike")
+        return "FLAT", 0.4, signals
     r = btc.return_60s
     if r is not None and r == r:
         if r > 0.0001:
-            return "UP", min(0.95, 0.5 + abs(r) * 50), f"return_60s={r:.5f}"
+            signals.append("mom_up")
+            return "UP", min(0.95, 0.5 + abs(r) * 50), signals
         if r < -0.0001:
-            return "DOWN", min(0.95, 0.5 + abs(r) * 50), f"return_60s={r:.5f}"
-        return "FLAT", 0.4, f"return_60s={r:.5f}"
-    return "FLAT", 0.4, "no momentum signal"
+            signals.append("mom_down")
+            return "DOWN", min(0.95, 0.5 + abs(r) * 50), signals
+        signals.append("mom_flat")
+        return "FLAT", 0.4, signals
+    return "FLAT", 0.4, ["weak_signal"]
 
 
-def _fair_probs(
-    poly: PolyFeatures,
-    price: Optional[PriceView] = None,
-) -> tuple[float, float]:
-    implied_up = float(max(0.01, min(0.99, poly.yes_mid)))
-    implied_no = float(max(0.01, min(0.99, poly.no_mid)))
+def _fair_prob_up(poly: PolyFeatures, price: Optional[PriceView] = None) -> float:
+    mkt = float(max(0.01, min(0.99, poly.yes_mid)))
     if price is not None:
         if price.direction == "UP":
-            fair_up = float(price.confidence)
+            fair = float(price.confidence)
         elif price.direction == "DOWN":
-            fair_up = float(1.0 - price.confidence)
+            fair = float(1.0 - price.confidence)
         else:
-            fair_up = implied_up
+            fair = mkt
     else:
-        fair_up = implied_up
-    fair_up = float(max(0.01, min(0.99, fair_up)))
-    fair_no = float(max(0.01, min(0.99, 1.0 - fair_up)))
-    return fair_up, fair_no
+        fair = mkt
+    return float(max(0.01, min(0.99, fair)))
 
 
 def mock_price_view(btc: BtcFeatures, _port: PortfolioSnapshot) -> PriceView:
-    d, c, rationale = _gap_signal(btc)
-    return PriceView(direction=d, confidence=float(c), rationale=rationale)
+    d, c, signals = _direction_signal(btc)
+    if btc.gap_change_30s is not None and btc.gap_change_30s == btc.gap_change_30s:
+        if btc.gap_change_30s > 0:
+            signals.append("gap_widening")
+        elif btc.gap_change_30s < 0:
+            signals.append("gap_narrowing")
+    return PriceView(direction=d, confidence=float(c), signals=signals[:4])
 
 
 def mock_poly_view(
@@ -58,98 +64,74 @@ def mock_poly_view(
     _port: PortfolioSnapshot,
     price: Optional[PriceView] = None,
 ) -> PolyView:
-    implied_up = float(max(0.01, min(0.99, poly.yes_mid)))
-    implied_no = float(max(0.01, min(0.99, poly.no_mid)))
-    fair_up, fair_no = _fair_probs(poly, price)
-    edge_yes = fair_up - implied_up
-    edge_no = fair_no - implied_no
-    d = price.direction if price else "FLAT"
-    return PolyView(
-        implied_prob_up=implied_up,
-        implied_prob_no=implied_no,
-        edge_vs_yes=edge_yes,
-        edge_vs_no=edge_no,
-        rationale=f"dir={d} fair_up={fair_up:.3f} mkt_yes={implied_up:.3f} fair_no={fair_no:.3f} mkt_no={implied_no:.3f}",
+    mkt = float(max(0.01, min(0.99, poly.yes_mid)))
+    fair = _fair_prob_up(poly, price)
+    edge = fair - mkt
+    signals: list[str] = []
+    if poly.prob_divergence and abs(poly.prob_divergence) > 0.01:
+        signals.append("mispriced_sum")
+    if edge > 0.02:
+        signals.append("yes_cheap")
+    elif edge < -0.02:
+        signals.append("no_cheap")
+    return PolyView(fair_prob_up=fair, edge=edge, signals=signals[:4])
+
+
+def _cap_size(s: Settings, port: PortfolioSnapshot) -> float:
+    return float(
+        min(
+            s.max_position_per_market_usd,
+            max(0.0, s.max_total_exposure_usd - port.exposure_usd),
+            max(0.0, port.cash * 0.25),
+        )
     )
 
 
 def mock_risk_view(
+    market_id: str,
     btc: BtcFeatures,
     poly: PolyView,
+    poly_f: PolyFeatures,
     port: PortfolioSnapshot,
     settings: Optional[Settings] = None,
 ) -> RiskView:
     s = settings or get_settings()
     secs_left = btc.secs_to_expiry if btc.secs_to_expiry is not None else 300.0
     can_trade = port.cash > 1.0 and secs_left > 30.0
-    pos = port.positions.get(btc.market_id)
+    pos = port.positions.get(market_id)
     yes_shares = pos.yes_shares if pos else 0.0
     no_shares = pos.no_shares if pos else 0.0
-    max_d = min(
-        s.max_position_per_market_usd,
-        max(0.0, s.max_total_exposure_usd - port.exposure_usd),
-        max(0.0, port.cash * 0.25),
-    )
-    return RiskView(
-        allow_buy_yes=can_trade and poly.edge_vs_yes > 0.02,
-        allow_sell_yes=yes_shares > 0,
-        allow_buy_no=can_trade and poly.edge_vs_no > 0.02,
-        allow_sell_no=no_shares > 0,
-        max_dollar=float(max_d),
-        rationale="mock risk caps",
-    )
+    mkt_yes = float(max(0.01, min(0.99, poly_f.yes_mid)))
+    no_mid = float(max(0.01, min(0.99, 1.0 - mkt_yes)))
 
+    max_d = _cap_size(s, port)
 
-def mock_decision(
-    poly_f: PolyFeatures,
-    poly: PolyView,
-    risk: RiskView,
-    port: PortfolioSnapshot,
-    settings: Optional[Settings] = None,
-) -> Decision:
-    s = settings or get_settings()
-    pos = port.positions.get(poly_f.market_id)
-    yes_shares = pos.yes_shares if pos else 0.0
-    no_shares = pos.no_shares if pos else 0.0
-    yes_mid = poly_f.yes_mid
-    no_mid = poly_f.no_mid
+    if secs_left <= 30.0:
+        return RiskView(action="HOLD", max_size=0.0, confidence=0.35)
 
-    if yes_shares > 0 and poly.edge_vs_yes < -0.03 and risk.allow_sell_yes:
-        return Decision(
+    if yes_shares > 0 and poly.edge < -0.03:
+        return RiskView(
             action="SELL_YES",
-            size_usd=min(risk.max_dollar, yes_shares * yes_mid),
-            predicted_prob_up=poly.implied_prob_up,
+            max_size=min(max_d, yes_shares * mkt_yes),
             confidence=0.55,
-            rationale="exit negative YES edge",
         )
-    if no_shares > 0 and poly.edge_vs_no < -0.03 and risk.allow_sell_no:
-        return Decision(
+    if no_shares > 0 and poly.edge > 0.03:
+        return RiskView(
             action="SELL_NO",
-            size_usd=min(risk.max_dollar, no_shares * no_mid),
-            predicted_prob_up=poly.implied_prob_up,
+            max_size=min(max_d, no_shares * no_mid),
             confidence=0.55,
-            rationale="exit negative NO edge",
         )
-    if poly.edge_vs_yes > 0.05 and risk.allow_buy_yes and risk.max_dollar > 1.0:
-        return Decision(
+    if poly.edge > 0.05 and can_trade and max_d > 1.0:
+        return RiskView(
             action="BUY_YES",
-            size_usd=min(risk.max_dollar, s.max_position_per_market_usd),
-            predicted_prob_up=float(max(0.01, min(0.99, poly.implied_prob_up + poly.edge_vs_yes))),
-            confidence=min(0.9, 0.5 + abs(poly.edge_vs_yes) * 3),
-            rationale="positive edge vs YES",
+            max_size=min(max_d, s.max_position_per_market_usd),
+            confidence=min(0.9, 0.5 + abs(poly.edge) * 3),
         )
-    if poly.edge_vs_no > 0.05 and risk.allow_buy_no and risk.max_dollar > 1.0:
-        return Decision(
+    if poly.edge < -0.05 and can_trade and max_d > 1.0:
+        return RiskView(
             action="BUY_NO",
-            size_usd=min(risk.max_dollar, s.max_position_per_market_usd),
-            predicted_prob_up=float(max(0.01, min(0.99, 1.0 - (poly.implied_prob_no + poly.edge_vs_no)))),
-            confidence=min(0.9, 0.5 + abs(poly.edge_vs_no) * 3),
-            rationale="positive edge vs NO",
+            max_size=min(max_d, s.max_position_per_market_usd),
+            confidence=min(0.9, 0.5 + abs(poly.edge) * 3),
         )
-    return Decision(
-        action="HOLD",
-        size_usd=0.0,
-        predicted_prob_up=poly.implied_prob_up,
-        confidence=0.35,
-        rationale="no trade",
-    )
+
+    return RiskView(action="HOLD", max_size=0.0, confidence=0.35)

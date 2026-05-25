@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Type
 
 import requests
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from btc5m_agents.config import Settings, get_settings
 
@@ -90,3 +92,18 @@ def check_vllm_reachable(
             f"Cannot reach vLLM at {url}. Start the server, e.g. "
             f"'vllm serve <model> --port 8000', and set VLLM_BASE_URL={base}.",
         ) from exc
+
+
+def with_structured_schema(
+    llm: ChatOpenAI,
+    schema: Type[BaseModel],
+    settings: Optional[Settings] = None,
+    *,
+    llm_backend: Optional[str] = None,
+) -> Runnable:
+    """Structured output: json_mode on vLLM (more reliable on small models), json_schema on OpenAI."""
+    s = settings or get_settings()
+    backend = resolve_backend(s, llm_backend)
+    if backend == "vllm":
+        return llm.with_structured_output(schema, method="json_mode")
+    return llm.with_structured_output(schema)

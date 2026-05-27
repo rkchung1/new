@@ -30,6 +30,7 @@ RISK_MANAGER = (
     Rules:
     - BUY_YES only when direction is UP, confidence >= 0.65, and fair_prob_up >= 0.55.
     - BUY_NO only when direction is DOWN, confidence >= 0.65, and fair_prob_up <= 0.45.
+    - If neither BUY gate is fully satisfied for a new position, choose HOLD.
     - Treat the payload key "dir" as binding: dir DOWN makes BUY_YES invalid; dir UP makes BUY_NO invalid.
     - Negative edge alone does not justify BUY_NO if fair_prob_up is above 0.45.
     - Positive edge alone does not justify BUY_YES if fair_prob_up is below 0.55.

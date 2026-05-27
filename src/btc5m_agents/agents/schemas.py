@@ -16,6 +16,13 @@ class PriceView(BaseModel):
     signals: list[ShortSignal] = Field(default_factory=list, max_length=4)
 
 
+class PolyViewLLM(BaseModel):
+    """Structured LLM output — edge is computed in code, not by the model."""
+
+    fair_prob_up: float = Field(ge=0.0, le=1.0)
+    signals: list[ShortSignal] = Field(default_factory=list, max_length=4)
+
+
 class PolyView(BaseModel):
     fair_prob_up: float = Field(ge=0.0, le=1.0)
     edge: float

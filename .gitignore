@@ -9,6 +9,8 @@ build/
 .pytest_cache/
 .ruff_cache/
 data/cache/**/*.parquet
+data/cache/btc_5m_2s_smoke.parquet
+data/cache/btc_5m_2s_60m.parquet
 reports/
 backtest_run.log
 data/cache/btc_5m_2s.csv

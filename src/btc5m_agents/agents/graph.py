@@ -19,7 +19,8 @@ from btc5m_agents.agents.mock_llm import (
     mock_price_view,
     mock_risk_view,
 )
-from btc5m_agents.agents.schemas import PolyView, PriceView, RiskView
+from btc5m_agents.agents.pricing import poly_view_from_llm
+from btc5m_agents.agents.schemas import PolyView, PolyViewLLM, PriceView, RiskView
 from btc5m_agents.agents.state import GraphState
 from btc5m_agents.config import Settings, get_settings
 from btc5m_agents.features.models import BtcFeatures, PolyFeatures
@@ -73,10 +74,11 @@ def build_graph(
         if use_mock:
             poly = mock_poly_view(poly_f, port)
             return {"poly_view": poly.model_dump()}
-        structured = with_structured_schema(llm, PolyView, s, llm_backend=llm_backend)  # type: ignore[arg-type]
+        structured = with_structured_schema(llm, PolyViewLLM, s, llm_backend=llm_backend)  # type: ignore[arg-type]
         msg = HumanMessage(content=_poly_payload(state))
         try:
-            poly = structured.invoke([SystemMessage(content=prompts.POLYMARKET_ANALYST), msg])
+            raw = structured.invoke([SystemMessage(content=prompts.POLYMARKET_ANALYST), msg])
+            poly = poly_view_from_llm(raw, poly_f.yes_mid)
         except (LengthFinishReasonError, OutputParserException, ValidationError, ValueError):
             poly = mock_poly_view(poly_f, port)
         return {"poly_view": poly.model_dump()}

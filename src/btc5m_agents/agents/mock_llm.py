@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+from btc5m_agents.agents.pricing import build_poly_view
 from btc5m_agents.agents.schemas import PolyView, PriceView, RiskView
+from btc5m_agents.agents.sizing import buy_headroom_usd, position_legs, sell_caps
 from btc5m_agents.config import Settings, get_settings
 from btc5m_agents.features.models import BtcFeatures, PolyFeatures
 from btc5m_agents.types import PortfolioSnapshot
@@ -64,27 +66,16 @@ def mock_poly_view(
     _port: PortfolioSnapshot,
     price: Optional[PriceView] = None,
 ) -> PolyView:
-    mkt = float(max(0.01, min(0.99, poly.yes_mid)))
     fair = _fair_prob_up(poly, price)
-    edge = fair - mkt
     signals: list[str] = []
     if poly.prob_divergence and abs(poly.prob_divergence) > 0.01:
         signals.append("mispriced_sum")
-    if edge > 0.02:
+    edge_preview = fair - float(poly.yes_mid)
+    if edge_preview > 0.02:
         signals.append("yes_cheap")
-    elif edge < -0.02:
+    elif edge_preview < -0.02:
         signals.append("no_cheap")
-    return PolyView(fair_prob_up=fair, edge=edge, signals=signals[:4])
-
-
-def _cap_size(s: Settings, port: PortfolioSnapshot) -> float:
-    return float(
-        min(
-            s.max_position_per_market_usd,
-            max(0.0, s.max_total_exposure_usd - port.exposure_usd),
-            max(0.0, port.cash * 0.25),
-        )
-    )
+    return build_poly_view(fair, signals, poly.yes_mid)
 
 
 def mock_risk_view(
@@ -98,13 +89,11 @@ def mock_risk_view(
     s = settings or get_settings()
     secs_left = btc.secs_to_expiry if btc.secs_to_expiry is not None else 300.0
     can_trade = port.cash > 1.0 and secs_left > 30.0
-    pos = port.positions.get(market_id)
-    yes_shares = pos.yes_shares if pos else 0.0
-    no_shares = pos.no_shares if pos else 0.0
+    yes_shares, no_shares = position_legs(port, market_id)
     mkt_yes = float(max(0.01, min(0.99, poly_f.yes_mid)))
-    no_mid = float(max(0.01, min(0.99, 1.0 - mkt_yes)))
+    sell_yes_cap, sell_no_cap = sell_caps(yes_shares, no_shares, mkt_yes)
 
-    max_d = _cap_size(s, port)
+    max_d = buy_headroom_usd(port, market_id, mkt_yes, s)
 
     if secs_left <= 30.0:
         return RiskView(action="HOLD", max_size=0.0, confidence=0.35)
@@ -112,13 +101,13 @@ def mock_risk_view(
     if yes_shares > 0 and poly.edge < -0.03:
         return RiskView(
             action="SELL_YES",
-            max_size=min(max_d, yes_shares * mkt_yes),
+            max_size=min(max_d, sell_yes_cap),
             confidence=0.55,
         )
     if no_shares > 0 and poly.edge > 0.03:
         return RiskView(
             action="SELL_NO",
-            max_size=min(max_d, no_shares * no_mid),
+            max_size=min(max_d, sell_no_cap),
             confidence=0.55,
         )
     if poly.edge > 0.05 and can_trade and max_d > 1.0:

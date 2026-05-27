@@ -51,7 +51,7 @@ Override via `.env` / `Settings` in `config.py`.
 |-------|------|
 | **Price Analyst** | `btc_features`: momentum, vol, trend, strike gap, timing |
 | **Polymarket Analyst** | `poly_features`: mids, spread, imbalance, prob divergence |
-| **Risk Manager** | Compact policy: `action`, `max_size`, `confidence`, `signals` |
+| **Risk Manager** | Execution policy from enriched state (`pos`, `yes_sh`/`no_sh`, `mkt_exp`, `eq`, `buy_cap`, `sell_yes_cap`/`sell_no_cap`, `exp_pct`, `cash`, analyst views) → `action`, `max_size`, `confidence` |
 | **Portfolio Manager** | Deterministic map from risk policy → `Decision` (no LLM) |
 
 Use **`--mock-llm`** for deterministic runs without any LLM.
@@ -120,6 +120,33 @@ Inspect the latest run:
 
 ```bash
 python -m btc5m_agents.scripts.inspect_results --run-id latest
+```
+
+## Replay subsets (fast testing)
+
+Checked-in slices under `data/cache/` (regenerate from the full `btc_5m_2s.parquet`):
+
+| File | Markets | Raw rows | Normalized (`--decision-every-sec 60`) |
+|------|---------|----------|----------------------------------------|
+| `btc_5m_2s_smoke.parquet` | 3 | 288 | ~15 steps (~36 LLM calls) |
+| `btc_5m_2s_60m.parquet` | 60 consecutive | 5,755 | ~300 steps (~900 LLM calls) |
+
+Build or customize:
+
+```bash
+python -m btc5m_agents.scripts.build_replay_subset --max-markets 3
+python -m btc5m_agents.scripts.build_replay_subset --max-markets 60
+# explicit slugs:
+python -m btc5m_agents.scripts.build_replay_subset --slug btc-updown-5m-1771847400 --slug btc-updown-5m-1771847700
+```
+
+Example backtest on the 60-market slice (~5 hours of consecutive 5m windows):
+
+```bash
+python -m btc5m_agents.scripts.run_backtest \
+  --replay data/cache/btc_5m_2s_60m.parquet \
+  --decision-every-sec 60 \
+  --llm-backend vllm
 ```
 
 ## Data file

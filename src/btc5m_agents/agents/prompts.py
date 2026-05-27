@@ -36,6 +36,8 @@ RISK_MANAGER = (
     - Weak edge or low confidence favor HOLD.
     - If abs(edge) <= 0.01, cap any new BUY_YES or BUY_NO at max_size 15.
     - If already LONG_YES or LONG_NO, do not add unless edge magnitude is at least 0.03.
+    - If LONG_YES and dir is DOWN with fair <= 0.45 and tte <= 90, prefer SELL_YES.
+    - If LONG_NO and dir is UP with fair >= 0.55 and tte <= 90, prefer SELL_NO.
     - With tte under 30 seconds, prefer HOLD unless fair_prob_up is extreme (>= 0.85 for BUY_YES or <= 0.15 for BUY_NO); cap late buys at 15.
     - Higher exposure or lower buy_cap should reduce size.
     - HOLD must use max_size 0.

@@ -28,6 +28,13 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _prompts_sha256(settings: Settings) -> Optional[str]:
+    p = settings.project_root / "src" / "btc5m_agents" / "agents" / "prompts.py"
+    if not p.exists():
+        return None
+    return _sha256_file(p)
+
+
 def _update_latest_symlink(reports_backtests: Path, run_id: str) -> None:
     reports_backtests.mkdir(parents=True, exist_ok=True)
     link = reports_backtests / "latest"
@@ -406,6 +413,7 @@ class BacktestEngine:
             "llm_timeout_sec": self._s.llm_timeout_sec,
             "llm_max_tokens": self._s.llm_max_tokens,
             "market_history_sec": self._s.market_history_sec,
+            "prompts_sha256": _prompts_sha256(self._s),
         }
         (reports / "config_snapshot.json").write_text(json.dumps(cfg_snap, indent=2), encoding="utf-8")
 

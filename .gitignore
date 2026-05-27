@@ -11,6 +11,15 @@ build/
 data/cache/**/*.parquet
 data/cache/btc_5m_2s_smoke.parquet
 data/cache/btc_5m_2s_60m.parquet
+data/cache/btc_5m_2s_24m.parquet
+data/cache/baskets/
+data/cache/baskets/*.parquet
+autoresearch/baskets/manifest.json
+autoresearch/baskets/market_stats.csv
 reports/
 backtest_run.log
+autoresearch/experiments.jsonl
+autoresearch/run.log
+autoresearch/last_eval.json
+autoresearch/best_mean_score.txt
 data/cache/btc_5m_2s.csv

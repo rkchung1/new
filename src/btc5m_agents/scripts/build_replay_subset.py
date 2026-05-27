@@ -20,15 +20,20 @@ _PRESET_OUT = {
     3: "btc_5m_2s_smoke.parquet",
     60: "btc_5m_2s_60m.parquet",
 }
+# (max_markets, skip_markets) -> output filename
+_PRESET_OFFSET_OUT = {
+    (24, 60): "btc_5m_2s_24m.parquet",
+}
 
 
 def build_replay_subset(
     source: Path,
     *,
     max_markets: int = 3,
+    skip_markets: int = 0,
     slugs: Optional[list[str]] = None,
 ) -> pd.DataFrame:
-    """Return raw replay rows for the first N markets (or explicit slugs), in source order."""
+    """Return raw replay rows for N consecutive markets (or explicit slugs), in start_time order."""
     df = pd.read_parquet(source)
     if "slug" not in df.columns:
         raise ValueError("Replay parquet must have a slug column")
@@ -46,8 +51,13 @@ def build_replay_subset(
             .index.astype(str)
             .tolist()
         )
+        skip = max(0, skip_markets)
         n = max(1, max_markets)
-        picked = order[:n]
+        if skip >= len(order):
+            raise ValueError(
+                f"skip_markets={skip} but source only has {len(order)} markets",
+            )
+        picked = order[skip : skip + n]
 
     sub = df[df["slug"].astype(str).isin(picked)].copy()
     sub = sub.sort_values(["start_time", "slug", "elapsed"]).reset_index(drop=True)
@@ -72,6 +82,12 @@ def main(
         min=1,
         help="Number of consecutive 5m markets to include (ignored if --slug is set)",
     ),
+    skip_markets: int = typer.Option(
+        0,
+        "--skip-markets",
+        min=0,
+        help="Skip this many markets from the start (by start_time) before taking --max-markets",
+    ),
     slug: Optional[list[str]] = typer.Option(
         None,
         "--slug",
@@ -86,14 +102,25 @@ def main(
         console.print(f"[red]Source not found:[/red] {src}")
         raise typer.Exit(code=1)
 
-    if output is None and max_markets in _PRESET_OUT and slug is None:
-        out = s.resolved_cache_dir() / _PRESET_OUT[max_markets]
+    if output is None and slug is None:
+        key = (max_markets, skip_markets)
+        if key in _PRESET_OFFSET_OUT:
+            out = s.resolved_cache_dir() / _PRESET_OFFSET_OUT[key]
+        elif skip_markets == 0 and max_markets in _PRESET_OUT:
+            out = s.resolved_cache_dir() / _PRESET_OUT[max_markets]
+        else:
+            out = s.resolved_cache_dir() / _DEFAULT_OUT_NAME
     else:
         out = output or (s.resolved_cache_dir() / _DEFAULT_OUT_NAME)
     if not out.is_absolute():
         out = s.project_root / out
 
-    sub = build_replay_subset(src, max_markets=max_markets, slugs=slug)
+    sub = build_replay_subset(
+        src,
+        max_markets=max_markets,
+        skip_markets=skip_markets,
+        slugs=slug,
+    )
     markets = sub["slug"].astype(str).nunique()
     write_parquet(sub, out)
 

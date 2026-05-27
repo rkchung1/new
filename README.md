@@ -129,13 +129,15 @@ Checked-in slices under `data/cache/` (regenerate from the full `btc_5m_2s.parqu
 | File | Markets | Raw rows | Normalized (`--decision-every-sec 60`) |
 |------|---------|----------|----------------------------------------|
 | `btc_5m_2s_smoke.parquet` | 3 | 288 | ~15 steps (~36 LLM calls) |
-| `btc_5m_2s_60m.parquet` | 60 consecutive | 5,755 | ~300 steps (~900 LLM calls) |
+| `btc_5m_2s_60m.parquet` | 60 consecutive (from file start) | 5,755 | ~300 steps (~900 LLM calls) |
+| `btc_5m_2s_24m.parquet` | 24 consecutive (after 60m block, no overlap) | 2,135 | ~115 steps (~273 LLM calls) |
 
 Build or customize:
 
 ```bash
 python -m btc5m_agents.scripts.build_replay_subset --max-markets 3
 python -m btc5m_agents.scripts.build_replay_subset --max-markets 60
+python -m btc5m_agents.scripts.build_replay_subset --max-markets 24 --skip-markets 60
 # explicit slugs:
 python -m btc5m_agents.scripts.build_replay_subset --slug btc-updown-5m-1771847400 --slug btc-updown-5m-1771847700
 ```
@@ -162,6 +164,25 @@ Normalized cache (optional, auto-written): `data/cache/btc_5m_2s_normalized_{has
 ## Reports
 
 Each run writes `trades.csv`, `decisions.jsonl`, `equity_curve.csv`, `summary.json`, and `config_snapshot.json` under `reports/backtests/{run_id}/`.
+
+## Prompt autoresearch
+
+Optimize agent prompts with a Cursor agent following [`autoresearch/program.md`](autoresearch/program.md). Each experiment runs **all** stratified baskets under `data/cache/baskets/` (see [`autoresearch/baskets/manifest.json`](autoresearch/baskets/manifest.json)); **keep/discard** uses the **mean** risk-adjusted score across baskets (not `btc_5m_2s_60m`).
+
+```bash
+# Build baskets once (from full replay)
+python -m btc5m_agents.scripts.build_stratified_baskets --markets-per-basket 5
+
+# Baseline
+python -m btc5m_agents.scripts.run_basket_eval > autoresearch/run.log 2>&1
+python -m btc5m_agents.scripts.record_experiment --baseline -d "baseline"
+
+# After editing prompts.py — one experiment
+python -m btc5m_agents.scripts.run_basket_eval > autoresearch/run.log 2>&1
+python -m btc5m_agents.scripts.record_experiment -d "your hypothesis"
+```
+
+Start Cursor with: *Read autoresearch/program.md and set up a new prompt autoresearch run. Then start the experiment loop.*
 
 ## Disclaimer
 

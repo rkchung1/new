@@ -97,6 +97,8 @@ def main(
         vllm_base_url=vllm_base_url if backend == "vllm" else None,
     )
     reports, summary = engine.run()
+    run_id = reports.name
+    print(f"AUTORESEARCH_RUN_ID={run_id}")
 
     table = Table(title="Backtest summary")
     table.add_column("Metric")

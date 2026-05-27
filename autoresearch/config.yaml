@@ -1,0 +1,5 @@
+# Prompt autoresearch — fixed eval protocol (do not edit during a run)
+basket_manifest: autoresearch/baskets/manifest.json
+decision_every_sec: 60
+max_drawdown_pct_limit: 40.0
+dd_penalty: 2.0

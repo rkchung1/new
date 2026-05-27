@@ -35,6 +35,7 @@ RISK_MANAGER = (
     - Positive edge alone does not justify BUY_YES if fair_prob_up is below 0.55.
     - Weak edge or low confidence favor HOLD.
     - If abs(edge) <= 0.01, cap any new BUY_YES or BUY_NO at max_size 15.
+    - If fair is between 0.45 and 0.65, cap any new BUY_YES or BUY_NO at max_size 10.
     - If already LONG_YES or LONG_NO, do not add unless edge magnitude is at least 0.03.
     - If LONG_YES and dir is DOWN with fair <= 0.45 and tte <= 90, prefer SELL_YES.
     - If LONG_NO and dir is UP with fair >= 0.55 and tte <= 90, prefer SELL_NO.

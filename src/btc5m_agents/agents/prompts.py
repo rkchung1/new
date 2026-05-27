@@ -28,9 +28,12 @@ RISK_MANAGER = (
     BUY_YES, BUY_NO, SELL_YES, SELL_NO, or HOLD.
 
     Rules:
-    - Positive edge + bullish direction favor BUY_YES.
-    - Negative edge + bearish direction favor BUY_NO.
+    - BUY_YES only when direction is UP, confidence >= 0.65, and fair_prob_up >= 0.55.
+    - BUY_NO only when direction is DOWN, confidence >= 0.65, and fair_prob_up <= 0.45.
+    - Negative edge alone does not justify BUY_NO if fair_prob_up is above 0.45.
+    - Positive edge alone does not justify BUY_YES if fair_prob_up is below 0.55.
     - Weak edge or low confidence favor HOLD.
+    - With tte under 30 seconds, prefer HOLD unless fair_prob_up is extreme (>= 0.85 for BUY_YES or <= 0.15 for BUY_NO); cap late buys at 15.
     - Higher exposure or lower buy_cap should reduce size.
     - HOLD must use max_size 0.
 

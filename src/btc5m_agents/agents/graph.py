@@ -1,4 +1,8 @@
-"""LangGraph workflow: parallel analysts, risk policy, deterministic execution."""
+"""LangGraph workflow: analysts, risk policy, deterministic execution.
+
+Mock mode runs price → poly sequentially so mock_poly_view receives price_view.
+LLM mode runs price and poly in parallel, then risk.
+"""
 
 from __future__ import annotations
 
@@ -72,7 +76,8 @@ def build_graph(
         poly_f = PolyFeatures.model_validate(state["poly_features"])
         port = PortfolioSnapshot.model_validate(state["portfolio"])
         if use_mock:
-            poly = mock_poly_view(poly_f, port)
+            pv = PriceView.model_validate(state["price_view"])
+            poly = mock_poly_view(poly_f, port, price=pv)
             return {"poly_view": poly.model_dump()}
         structured = with_structured_schema(llm, PolyViewLLM, s, llm_backend=llm_backend)  # type: ignore[arg-type]
         msg = HumanMessage(content=_poly_payload(state))
@@ -80,7 +85,8 @@ def build_graph(
             raw = structured.invoke([SystemMessage(content=prompts.POLYMARKET_ANALYST), msg])
             poly = poly_view_from_llm(raw, poly_f.yes_mid)
         except (LengthFinishReasonError, OutputParserException, ValidationError, ValueError):
-            poly = mock_poly_view(poly_f, port)
+            pv = PriceView.model_validate(state["price_view"]) if state.get("price_view") else None
+            poly = mock_poly_view(poly_f, port, price=pv)
         return {"poly_view": poly.model_dump()}
 
     def risk_manager(state: GraphState) -> dict[str, Any]:
@@ -110,9 +116,14 @@ def build_graph(
     g.add_node("polymarket_analyst", polymarket_analyst)
     g.add_node("risk_manager", risk_manager)
     g.add_node("portfolio_manager", portfolio_manager)
-    g.add_edge(START, "price_analyst")
-    g.add_edge(START, "polymarket_analyst")
-    g.add_edge(["price_analyst", "polymarket_analyst"], "risk_manager")
+    if use_mock:
+        g.add_edge(START, "price_analyst")
+        g.add_edge("price_analyst", "polymarket_analyst")
+        g.add_edge("polymarket_analyst", "risk_manager")
+    else:
+        g.add_edge(START, "price_analyst")
+        g.add_edge(START, "polymarket_analyst")
+        g.add_edge(["price_analyst", "polymarket_analyst"], "risk_manager")
     g.add_edge("risk_manager", "portfolio_manager")
     g.add_edge("portfolio_manager", END)
     return g.compile()

@@ -10,8 +10,8 @@ class GraphState(TypedDict, total=False):
 
     market_id: str
     ts: int
-    btc_features: dict
-    poly_features: dict
+    dynamics_features: dict
+    prediction_market_features: dict
     portfolio: dict
     price_view: dict
     poly_view: dict

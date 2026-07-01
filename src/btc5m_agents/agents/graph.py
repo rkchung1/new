@@ -27,16 +27,20 @@ from btc5m_agents.agents.pricing import poly_view_from_llm
 from btc5m_agents.agents.schemas import PolyView, PolyViewLLM, PriceView, RiskView
 from btc5m_agents.agents.state import GraphState
 from btc5m_agents.config import Settings, get_settings
-from btc5m_agents.features.models import BtcFeatures, PolyFeatures
+from btc5m_agents.features.models import MarketDynamicsFeatures, PredictionMarketFeatures
 from btc5m_agents.types import PortfolioSnapshot
 
 
-def _price_payload(state: GraphState) -> str:
-    return json.dumps(state.get("btc_features"), default=str, separators=(",", ":"))
+def _dynamics_payload(state: GraphState) -> str:
+    return json.dumps(state.get("dynamics_features"), default=str, separators=(",", ":"))
 
 
-def _poly_payload(state: GraphState) -> str:
-    return json.dumps(state.get("poly_features"), default=str, separators=(",", ":"))
+def _prediction_market_payload(state: GraphState) -> str:
+    return json.dumps(
+        state.get("prediction_market_features"),
+        default=str,
+        separators=(",", ":"),
+    )
 
 
 def build_graph(
@@ -59,50 +63,50 @@ def build_graph(
         )
 
     def price_analyst(state: GraphState) -> dict[str, Any]:
-        btc = BtcFeatures.model_validate(state["btc_features"])
+        dynamics = MarketDynamicsFeatures.model_validate(state["dynamics_features"])
         port = PortfolioSnapshot.model_validate(state["portfolio"])
         if use_mock:
-            pv = mock_price_view(btc, port)
+            pv = mock_price_view(dynamics, port)
             return {"price_view": pv.model_dump()}
         structured = with_structured_schema(llm, PriceView, s, llm_backend=llm_backend)  # type: ignore[arg-type]
-        msg = HumanMessage(content=_price_payload(state))
+        msg = HumanMessage(content=_dynamics_payload(state))
         try:
             pv = structured.invoke([SystemMessage(content=prompts.PRICE_ANALYST), msg])
         except (LengthFinishReasonError, OutputParserException, ValidationError, ValueError):
-            pv = mock_price_view(btc, port)
+            pv = mock_price_view(dynamics, port)
         return {"price_view": pv.model_dump()}
 
     def polymarket_analyst(state: GraphState) -> dict[str, Any]:
-        poly_f = PolyFeatures.model_validate(state["poly_features"])
+        prediction = PredictionMarketFeatures.model_validate(state["prediction_market_features"])
         port = PortfolioSnapshot.model_validate(state["portfolio"])
         if use_mock:
             pv = PriceView.model_validate(state["price_view"])
-            poly = mock_poly_view(poly_f, port, price=pv)
+            poly = mock_poly_view(prediction, port, price=pv)
             return {"poly_view": poly.model_dump()}
         structured = with_structured_schema(llm, PolyViewLLM, s, llm_backend=llm_backend)  # type: ignore[arg-type]
-        msg = HumanMessage(content=_poly_payload(state))
+        msg = HumanMessage(content=_prediction_market_payload(state))
         try:
             raw = structured.invoke([SystemMessage(content=prompts.POLYMARKET_ANALYST), msg])
-            poly = poly_view_from_llm(raw, poly_f.yes_mid)
+            poly = poly_view_from_llm(raw, prediction.yes_mid)
         except (LengthFinishReasonError, OutputParserException, ValidationError, ValueError):
             pv = PriceView.model_validate(state["price_view"]) if state.get("price_view") else None
-            poly = mock_poly_view(poly_f, port, price=pv)
+            poly = mock_poly_view(prediction, port, price=pv)
         return {"poly_view": poly.model_dump()}
 
     def risk_manager(state: GraphState) -> dict[str, Any]:
-        btc = BtcFeatures.model_validate(state["btc_features"])
-        poly_f = PolyFeatures.model_validate(state["poly_features"])
+        dynamics = MarketDynamicsFeatures.model_validate(state["dynamics_features"])
+        prediction = PredictionMarketFeatures.model_validate(state["prediction_market_features"])
         port = PortfolioSnapshot.model_validate(state["portfolio"])
         poly = PolyView.model_validate(state["poly_view"])
         if use_mock:
-            rv = mock_risk_view(state["market_id"], btc, poly, poly_f, port, s)
+            rv = mock_risk_view(state["market_id"], dynamics, prediction, poly, port, s)
             return {"risk_view": rv.model_dump()}
         structured = with_structured_schema(llm, RiskView, s, llm_backend=llm_backend)  # type: ignore[arg-type]
         msg = HumanMessage(content=risk_payload(state, s))
         try:
             rv = structured.invoke([SystemMessage(content=prompts.RISK_MANAGER), msg])
         except (LengthFinishReasonError, OutputParserException, ValidationError, ValueError):
-            rv = mock_risk_view(state["market_id"], btc, poly, poly_f, port, s)
+            rv = mock_risk_view(state["market_id"], dynamics, prediction, poly, port, s)
         return {"risk_view": rv.model_dump()}
 
     def portfolio_manager(state: GraphState) -> dict[str, Any]:

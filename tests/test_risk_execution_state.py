@@ -48,8 +48,8 @@ def _state(
         ).model_dump(mode="json"),
         "price_view": {"direction": "UP", "confidence": 0.7},
         "poly_view": {"fair_prob_up": 0.6, "edge": 0.05},
-        "poly_features": {"yes_mid": yes_mid},
-        "btc_features": {"secs_to_expiry": 120.0},
+        "prediction_market_features": {"yes_mid": yes_mid},
+        "dynamics_features": {"secs_to_expiry": 120.0},
     }
 
 
@@ -101,7 +101,7 @@ def test_build_risk_execution_state_fields() -> None:
     assert out["buy_cap"] == 96.0
     assert out["exp_pct"] == round(4.0 / 300.0, 4)
     assert out["tte"] == 120.0
-    assert out["edge"] == compute_edge(0.6, 0.5)
+    assert out["edge"] == compute_edge(0.6, 0.4)
 
 
 def test_risk_payload_json_serializable() -> None:

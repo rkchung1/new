@@ -255,7 +255,7 @@ class BacktestEngine:
 
             snap = row_to_snapshot(row)
             self._state_cache.update(snap)
-            btc_f, poly_f = self._feature_engine.compute(self._state_cache, snap)
+            dynamics_f, prediction_f = self._feature_engine.compute(self._state_cache, snap)
             port_snap = portfolio_to_snapshot(self.portfolio, yes_marks, no_marks)
 
             if ts >= end_ts:
@@ -277,8 +277,8 @@ class BacktestEngine:
                 state: dict[str, Any] = {
                     "market_id": mid,
                     "ts": ts,
-                    "btc_features": btc_f.model_dump(),
-                    "poly_features": poly_f.model_dump(),
+                    "dynamics_features": dynamics_f.model_dump(),
+                    "prediction_market_features": prediction_f.model_dump(),
                     "portfolio": port_snap.model_dump(mode="json"),
                 }
                 out = self._graph.invoke(state)
@@ -340,8 +340,8 @@ class BacktestEngine:
                 "ts": ts,
                 "market_id": mid,
                 "market_end_ts": end_ts,
-                "btc_features": btc_f.model_dump(),
-                "poly_features": poly_f.model_dump(),
+                "dynamics_features": dynamics_f.model_dump(),
+                "prediction_market_features": prediction_f.model_dump(),
                 "portfolio_before": port_snap.model_dump(mode="json"),
                 "price_view": out.get("price_view"),
                 "poly_view": out.get("poly_view"),

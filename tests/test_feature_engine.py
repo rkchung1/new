@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from btc5m_agents.features import FeatureEngine, MarketStateCache
+from btc5m_agents.features import (
+    FeatureEngine,
+    MarketDynamicsFeatures,
+    MarketStateCache,
+    PredictionMarketFeatures,
+)
 from btc5m_agents.types import Snapshot
 
 
@@ -29,22 +34,27 @@ def _snap(ts: int, price: float, yes: float = 0.5, gap: float = 10.0) -> Snapsho
     )
 
 
-def test_momentum_and_poly_features() -> None:
+def test_split_agent_feature_payloads() -> None:
     cache = MarketStateCache(history_sec=900)
     engine = FeatureEngine()
     prices = [100_000.0, 100_010.0, 100_020.0, 100_030.0]
+    dynamics: MarketDynamicsFeatures | None = None
+    prediction: PredictionMarketFeatures | None = None
     for i, p in enumerate(prices):
         snap = _snap(1000 + i * 30, p, yes=0.48 + i * 0.01)
         cache.update(snap)
-        btc_f, poly_f = engine.compute(cache, snap)
+        dynamics, prediction = engine.compute(cache, snap)
 
-    assert btc_f.return_60s is not None
-    assert btc_f.return_60s > 0
-    assert "btc_price" not in btc_f.model_dump()
-    assert "market_id" not in btc_f.model_dump()
-    assert poly_f.yes_spread_pct is not None
-    assert abs(poly_f.yes_spread_pct - 0.02 / poly_f.yes_mid) < 0.01
-    assert "no_mid" not in poly_f.model_dump()
-    assert poly_f.strike_gap_pct == btc_f.strike_gap_pct
-    assert poly_f.return_60s == btc_f.return_60s
-    assert poly_f.vol_120s == btc_f.vol_120s
+    assert dynamics is not None and prediction is not None
+    assert dynamics.return_60s is not None
+    assert dynamics.return_60s > 0
+    assert dynamics.model_prob_up is not None
+    assert prediction.model_prob_up == dynamics.model_prob_up
+    assert prediction.yes_spread_pct is not None
+    assert abs(prediction.yes_spread_pct - 0.02 / prediction.yes_mid) < 0.01
+    assert dynamics.observable_elapsed == 19.0
+    assert prediction.half_spread_cost == round(prediction.yes_spread_pct / 2, 4)
+    assert set(dynamics.model_dump()) == set(MarketDynamicsFeatures.model_fields)
+    assert set(prediction.model_dump()) == set(PredictionMarketFeatures.model_fields)
+    assert "yes_mid" not in dynamics.model_dump()
+    assert "strike_gap_pct" not in prediction.model_dump()

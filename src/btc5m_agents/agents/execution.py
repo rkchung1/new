@@ -42,10 +42,10 @@ def build_risk_execution_state(
     mid = str(state["market_id"])
     pv = state.get("price_view") or {}
     poly = state.get("poly_view") or {}
-    poly_f = state.get("poly_features") or {}
-    btc = state.get("btc_features") or {}
+    prediction = state.get("prediction_market_features") or {}
+    dynamics = state.get("dynamics_features") or {}
 
-    yes_mid = float(poly_f.get("yes_mid", 0.5))
+    yes_mid = float(prediction.get("yes_mid", 0.5))
     yes_sh, no_sh = position_legs(port, mid)
     mkt_exp = market_exposure_usd(yes_sh, no_sh, yes_mid)
     sell_yes_cap, sell_no_cap = sell_caps(yes_sh, no_sh, yes_mid)
@@ -73,7 +73,7 @@ def build_risk_execution_state(
             yes_mid,
         ),
     }
-    tte = btc.get("secs_to_expiry")
+    tte = dynamics.get("secs_to_expiry")
     if tte is not None:
         out["tte"] = round(float(tte), 1)
     return out
